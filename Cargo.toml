@@ -2,7 +2,10 @@
 name = "rust_tcp_data_share"
 version = "0.1.0"
 authors = ["Michael <v.mi@gmx.de>"]
+edition = "2018"
 
 [dependencies]
 log = "0.4.5"
 simplelog = "0.5"
+enum-primitive-derive = "0.1.2"
+num-traits = "0.2.6"
