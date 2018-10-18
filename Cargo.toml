@@ -1,0 +1,6 @@
+[package]
+name = "rust_tcp_data_share"
+version = "0.1.0"
+authors = ["Michael <v.mi@gmx.de>"]
+
+[dependencies]
