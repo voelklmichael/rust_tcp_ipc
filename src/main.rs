@@ -1,4 +1,4 @@
-use std::io::{Read, Result};
+use std::io::{Read, Result, Write};
 use std::net::{TcpStream, ToSocketAddrs};
 
 #[macro_use]
@@ -13,8 +13,14 @@ const BUFFER_SIZE: usize = 512;
 use std::fmt::Debug;
 trait ProtocolTrait: Debug {
     type Commands: Debug + Send + Clone + Copy + 'static;
+    type States: Debug + Send + Clone + 'static;
     const HEADER_SIZE: usize;
     fn new() -> Self;
+    fn get_default_state() -> Self::States;
+    fn immediate_response_is_necessary(
+        command: Self::Commands,
+        current_state: Self::States,
+    ) -> Option<String>;
     fn parse_message(
         &mut self,
         unparsed_messages: &mut Vec<u8>,
@@ -61,17 +67,47 @@ enum ProtocolExampleCommands {
     Pause = 3,
     Continue = 4,
     Error = 999,
+    QueryIsBusy = 12,
+}
+#[derive(Debug, Clone)]
+enum ProtocolExampleStates {
+    WaitingForRequest,
+    Working(String),
 }
 
 #[derive(Debug)]
 struct ProtocolExample {
     header: Option<(usize, ProtocolExampleCommands)>,
 }
+
 impl ProtocolTrait for ProtocolExample {
     type Commands = ProtocolExampleCommands;
+    type States = ProtocolExampleStates;
     const HEADER_SIZE: usize = 6;
     fn new() -> Self {
         ProtocolExample { header: None }
+    }
+    fn get_default_state() -> Self::States {
+        ProtocolExampleStates::WaitingForRequest
+    }
+    fn immediate_response_is_necessary(
+        command: Self::Commands,
+        current_state: Self::States,
+    ) -> Option<String> {
+        use self::ProtocolExampleCommands::*;
+        use self::ProtocolExampleStates::*;
+        match command {
+            Unknown => None,
+            Start => None,
+            Stop => None,
+            Pause => None,
+            Continue => None,
+            Error => None,
+            QueryIsBusy => match current_state {
+                WaitingForRequest => None,
+                Working(message) => Some(message),
+            },
+        }
     }
     fn update_header(&mut self, header: Option<&[u8]>) {
         if let Some(h) = header {
@@ -108,13 +144,28 @@ impl ProtocolTrait for ProtocolExample {
 
 #[derive(Debug)]
 struct Client<Protocol: ProtocolTrait> {
-    incoming_message_queue:
-        std::sync::Arc<std::sync::Mutex<Vec<(<Protocol as ProtocolTrait>::Commands, Vec<u8>)>>>,
-    _phantom: std::marker::PhantomData<Protocol>,
+    incoming_message_queue: std::sync::Arc<
+        std::sync::Mutex<(
+            Vec<(<Protocol as ProtocolTrait>::Commands, Vec<u8>)>,
+            <Protocol as ProtocolTrait>::States,
+        )>,
+    >,
 }
 
 impl<Protocol: ProtocolTrait> Client<Protocol> {
-    fn connect<T: ToSocketAddrs>(socket_addresses: T) -> Result<Client<Protocol>> {
+    fn new() -> Self {
+        Client {
+            incoming_message_queue: std::sync::Arc::new(std::sync::Mutex::new((
+                Vec::new(),
+                <Protocol as ProtocolTrait>::get_default_state(),
+            ))),
+        }
+    }
+    fn connect<T: ToSocketAddrs>(
+        &mut self,
+        socket_addresses: T,
+        timeout_time: std::time::Duration,
+    ) -> Result<()> {
         let mut socket_addresses = socket_addresses.to_socket_addrs()?;
         let mut error =
             std::io::Error::new(std::io::ErrorKind::Other, "Socket Address list is empty");
@@ -122,10 +173,7 @@ impl<Protocol: ProtocolTrait> Client<Protocol> {
         let mut stream = loop {
             if let Some(socket_address) = socket_addresses.next() {
                 info!("try to connect to {:?}", socket_address);
-                match TcpStream::connect_timeout(
-                    &socket_address,
-                    std::time::Duration::from_millis(100),
-                ) {
+                match TcpStream::connect_timeout(&socket_address, timeout_time) {
                     Ok(stream) => {
                         info!("connected");
                         break stream;
@@ -140,8 +188,7 @@ impl<Protocol: ProtocolTrait> Client<Protocol> {
             }
         };
         // start read thread
-        let messages = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
-        let messages_inside = messages.clone();
+        let messages_inside = self.incoming_message_queue.clone();
         std::thread::spawn(move || {
             let mut buffer = [0; BUFFER_SIZE as usize];
             let mut unparsed_messages = Vec::with_capacity(BUFFER_SIZE);
@@ -163,7 +210,15 @@ impl<Protocol: ProtocolTrait> Client<Protocol> {
                             if !parsed_messages.is_empty() {
                                 if let Ok(mut inner_data) = messages_inside.lock() {
                                     for new_message in parsed_messages {
-                                        inner_data.push(new_message);
+                                        if let Some(message) = <Protocol as ProtocolTrait>::immediate_response_is_necessary(
+                                            new_message.0, inner_data.1.clone())
+                                        {
+                                            info!("immediate response necessary, answering: {:?}", message);
+                                            stream.write(message.as_bytes()).unwrap();
+
+                                        } else {
+                                        inner_data.0.push(new_message);
+                                    }
                                     }
                                 } else {
                                     error!("Failed to lock mutex in read thread");
@@ -177,31 +232,27 @@ impl<Protocol: ProtocolTrait> Client<Protocol> {
             }
         });
 
-        Ok(Client {
-            _phantom: std::marker::PhantomData,
-            incoming_message_queue: messages,
-        })
+        Ok(())
     }
-    /*fn get_messages(&mut self) -> Vec<(<Protocol as ProtocolTrait>::Commands, Vec<u8>)> {
-        let mut messages = self.incoming_message_queue.lock().unwrap();
-        *messages
-    }*/
 }
 fn main() {
     TermLogger::init(LevelFilter::Info, Config::default()).unwrap();
-    let mut client = Client::<ProtocolExample>::connect("127.0.0.1:8080").unwrap();
-    std::thread::sleep(std::time::Duration::from_millis(500));
+    let mut client = Client::<ProtocolExample>::new();
+    client
+        .connect("127.0.0.1:8080", std::time::Duration::from_millis(200))
+        .unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(202));
     {
         let mut messages = client.incoming_message_queue.lock().unwrap();
-        while let Some(message) = messages.pop() {
+        while let Some(message) = messages.0.pop() {
             println!("{:?}", message);
         }
     }
     println!("--------");
-    std::thread::sleep(std::time::Duration::from_millis(500));
+    std::thread::sleep(std::time::Duration::from_millis(200));
     {
         let messages = client.incoming_message_queue.lock().unwrap();
-        for message in messages.iter() {
+        for message in messages.0.iter() {
             println!("{:?}", message);
         }
     }
