@@ -1,189 +1,30 @@
 use std::io::{Read, Write};
-use std::net::{TcpListener, TcpStream, ToSocketAddrs};
+use std::net::{TcpListener, TcpStream};
 
-/*use num_derive::*;
-
-#[macro_use]
-extern crate enum_primitive_derive;
-extern crate num_traits;
-
-use num_traits::{FromPrimitive, ToPrimitive};*/
+//use num_derive::*;
 
 //mod protocol;
 
 //use num_traits::FromPrimitive;
-use simplelog::*;
+//use simplelog::*;
 
-mod protocol;
-use self::protocol::*;
+const HEADER_SIZE: usize = 5;
 
-struct Config {
-    connect_wait_time_ms: u64,
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Commands {
+    Start,
+    Funny,
 }
-
-#[derive(Debug)]
-struct Client<P: Protocol> {
-    protocol: P,
-    config: Config,
-}
-impl<P: Protocol> Client<P> {
-    fn connect<T: ToSocketAddrs>(
-        socket_addresses: T,
-        config: Config,
-    ) -> Result<Self, std::io::Error> {
-        let mut socket_addresses = socket_addresses.to_socket_addrs()?;
-        let mut error =
-            std::io::Error::new(std::io::ErrorKind::Other, "Socket Address list is empty");
-        // connect
-        let mut stream = loop {
-            if let Some(socket_address) = socket_addresses.next() {
-                info!("try to connect to {:?}", socket_address);
-                match TcpStream::connect_timeout(&socket_address, timeout_time) {
-                    Ok(stream) => {
-                        info!("connected");
-                        break stream;
-                    }
-                    Err(err) => {
-                        info!("Received error: {:?}", err);
-                        error = err;
-                    }
-                }
-            } else {
-                return Err(error);
-            }
-        };
-    }
-}
-
-struct ProtocolBuffer<P: Protocol> {
-    current_command: Option<P::Commands>,
-    current_target: usize,
-    current_message: Vec<u8>,
-    incoming_buffer_vec: Vec<u8>,
-    busy_state: P::BusyStates,
-}
-impl<P: Protocol> ProtocolBuffer<P> {
-    fn new() -> Self {
-        Self {
-            current_command: None,
-            current_target: 0,
-            current_message: Vec::new(),
-            incoming_buffer_vec: Vec::new(),
-            busy_state: P::idle(),
-        }
-    }
-    fn process_new_buffer(&mut self, incoming_buffer: &[u8]) -> Option<(P::Commands, Vec<u8>)> {
-        self.incoming_buffer_vec.extend_from_slice(incoming_buffer);
-        if let Some(command) = self.current_command {
-            if self.incoming_buffer_vec.len() + self.current_message.len() < self.current_target {
-                self.current_message.append(&mut self.incoming_buffer_vec);
-                None
-            } else {
-                let mut completed_message = self.current_message.split_off(0);
-                let mut to_append = self
-                    .incoming_buffer_vec
-                    .split_off(self.current_target - completed_message.len());
-                completed_message.append(&mut self.incoming_buffer_vec);
-                self.incoming_buffer_vec.append(&mut to_append);
-                self.current_target = 0; //not strictly necessary
-                self.current_command = None;
-                Some((command, completed_message))
-            }
-        } else {
-            if let Some((header, message)) =
-                P::message_slice_to_header_array(self.incoming_buffer_vec.as_slice())
-            {
-                let (command, length) = match P::parse_header(header) {
-                    Ok((command, length)) => (command, length),
-                    Err((err, message)) => {
-                        panic!("parse error: {:?}, incoming header: {:?}", err, message)
-                    }
-                };
-                self.current_command = Some(command);
-                self.current_target = length;
-                self.current_message = message.to_vec(); // capicity can also be set already
-                self.incoming_buffer_vec = self.current_message.split_off(length);
-                self.current_message
-                    .reserve(length - self.current_message.len());
-                self.process_new_buffer(&[]) // process remaining buffer
-            } else {
-                None
-            }
-        }
+fn array_to_enum(input: &[u8; 2]) -> Option<Commands> {
+    use self::Commands::*;
+    match input {
+        [b'0', b'0'] => Some(Start),
+        [b'4', b'2'] => Some(Funny),
+        _ => None,
     }
 }
 
 fn main() {
-    start_server();
-    // start client thread
-    let mut client = TcpStream::connect_timeout(
-        &"127.0.0.1:6666".to_owned().into(),
-        std::time::Duration::from_millis(5_000),
-    )
-    .expect("client unwrap");
-    client
-        .set_nonblocking(true)
-        .expect("set_nonblocking call failed");
-    let mut protocol = ProtocolBuffer::<ProtocolExample>::new();
-
-    std::thread::sleep(std::time::Duration::from_micros(10));
-
-    let (message_sender, message_receiver) = std::sync::mpsc::channel();
-    let (busy_state_sender, busy_state_receiver) = std::sync::mpsc::channel();
-    std::thread::spawn(move || {
-        let mut incoming_buffer = [0; 128];
-        loop {
-            loop {
-                match busy_state_receiver.try_recv() {
-                    Ok(busy_state) => protocol.busy_state = busy_state,
-                    Err(std::sync::mpsc::TryRecvError::Empty) => break,
-                    Err(std::sync::mpsc::TryRecvError::Disconnected) => panic!("disconnected!"),
-                }
-            }
-            match client.read(&mut incoming_buffer) {
-                Ok(message_length) => {
-                    if message_length == 0 {
-                        // nothing to do
-                    } else {
-                        let mut buffer = &incoming_buffer[0..message_length];
-                        while let Some((command, message)) = protocol.process_new_buffer(buffer) {
-                            buffer = &[];
-                            if let Some((command, message)) =
-                                ProtocolExample::message_is_send_via_immediate_route(
-                                    &command,
-                                    &message,
-                                    &protocol.busy_state,
-                                ) {
-                                let message =
-                                    ProtocolExample::construct_message(command, &message).unwrap();
-                                client.write(&message).unwrap();
-                            } else {
-                                message_sender.send((command, message)).unwrap();
-                            }
-                        }
-                    }
-                }
-                Err(err) => {
-                    if err.kind() == std::io::ErrorKind::WouldBlock {
-                    } else {
-                        panic!("read error{:?}", err)
-                    }
-                }
-            }
-            std::thread::sleep(std::time::Duration::from_micros(10)); // wait between loops
-        }
-    });
-
-    busy_state_sender.send(BusyStatesExample::Working).unwrap();
-    busy_state_sender.send(BusyStatesExample::Idle).unwrap();
-    for _ in 0..3 {
-        let (c, m) = message_receiver.recv().unwrap();
-        println!("{:?}", (c, m));
-    }
-    std::thread::sleep(std::time::Duration::from_micros(500_000));
-}
-
-fn start_server() {
     // start server thread
     std::thread::spawn(move || {
         let (mut server, socket_address) = TcpListener::bind("127.0.0.1:6666")
@@ -191,28 +32,125 @@ fn start_server() {
             .accept()
             .unwrap();
         println!("server connected to {:?}", socket_address);
-
-        use self::CommandsExample::*;
-
-        println!("---------");
-        let message = ProtocolExample::construct_message(Start, &[b'a']).unwrap();
-        server.write(&message).unwrap();
-        std::thread::sleep(std::time::Duration::from_millis(100));
-
-        println!("---------");
-        let message = ProtocolExample::construct_message(Funny, &[b'a', 0, 1, 2, 3, 4]).unwrap();
-        server.write(&message).unwrap();
-        std::thread::sleep(std::time::Duration::from_millis(100));
-
-        println!("---------");
-        let message = ProtocolExample::construct_message(Start, &[b'b', 0, 1, 4]).unwrap();
-        server.write(&message).unwrap();
-        std::thread::sleep(std::time::Duration::from_millis(100));
+        let message = [0, 0, 1, b'4', b'2', b'a'];
+        for &x in &message {
+            server.write(&[x]).unwrap();
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        let message = [0, 0, 6, b'0', b'0', b'a', 0, 1, 2, 3, 4];
+        for &x in &message {
+            server.write(&[x]).unwrap();
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        println!("server thread finished");
     });
     std::thread::sleep(std::time::Duration::from_micros(10));
+
+    // start client thread
+    let mut client = TcpStream::connect("127.0.0.1:6666").expect("client unwrap");
+    client
+        .set_read_timeout(Some(std::time::Duration::from_micros(1)))
+        .unwrap();
+    let mut incoming_buffer_vec = Vec::<u8>::new();
+    let mut current_command: Option<Commands> = None;
+    let mut current_remaing: usize = 0;
+    let mut current_message: Vec<u8> = Vec::new();
+
+    let mut incoming_buffer = [0; 128];
+    loop {
+        match client.read(&mut incoming_buffer) {
+            Ok(message_length) => {
+                if message_length == 0 {
+                    panic!("message length is zero");
+                }
+                let incoming_buffer = &incoming_buffer[0..message_length];
+                //debug!("recv: {:?}", &incoming_buffer[0..message_length]);
+                let unused_buffer = if let Some(command) = current_command {
+                    if message_length < current_remaing {
+                        current_message.extend_from_slice(&incoming_buffer[0..message_length]);
+                        current_remaing -= message_length;
+                        &[]
+                    } else {
+                        current_message.extend_from_slice(&incoming_buffer[0..current_remaing]);
+                        received_message(command, current_message.clone());
+                        current_message.clear();
+                        let remaining_length_before = current_remaing;
+                        current_remaing = 0; //not strictly necessary
+                        current_command = None;
+                        &incoming_buffer[remaining_length_before..]
+                    }
+                } else {
+                    &incoming_buffer
+                };
+                incoming_buffer_vec.extend_from_slice(unused_buffer);
+                if let Some((header, message)) =
+                    message_slice_to_header_array(incoming_buffer_vec.as_slice())
+                {
+                    let (command, length) = match parse(header) {
+                        Ok((command, length)) => (command, length),
+                        Err((err, message)) => {
+                            panic!("parse error: {:?}, incoming header: {:?}", err, message)
+                        }
+                    };
+                    current_command = Some(command);
+                    current_remaing = length;
+                    current_message = message.to_vec(); // capicity can also be set already
+                    current_message.reserve(length - current_message.len());
+                    incoming_buffer_vec.clear();
+                } else {
+                    // wait for further messages
+                }
+            }
+            Err(err) => {
+                if err.kind() == std::io::ErrorKind::WouldBlock {
+                } else {
+                    panic!("read error{:?}", err)
+                }
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_micros(10));
+    }
+    std::thread::sleep(std::time::Duration::from_secs(1));
 }
 
-const BUFFER_SIZE: usize = 512;
+fn received_message(command: Commands, message: Vec<u8>) {
+    println!("{:?}", (command, message));
+    if command == Commands::Start {
+        panic!("working");
+    }
+}
+
+#[derive(Debug)]
+enum ParseErrors {
+    CommandParseError,
+}
+fn parse(header: &[u8; HEADER_SIZE]) -> Result<(Commands, usize), (ParseErrors, Vec<u8>)> {
+    if let Some(command) = array_to_enum(&[header[3], header[4]]) {
+        let length: usize = header[0..3]
+            .iter()
+            .rev()
+            .enumerate()
+            .map(|(i, &x)| ((x as u32) * 10u32.pow(i as u32)) as usize)
+            .sum();
+        Ok((command, length))
+    } else {
+        Err((ParseErrors::CommandParseError, header.to_vec()))
+    }
+}
+
+#[inline]
+fn message_slice_to_header_array(slice: &[u8]) -> Option<(&[u8; HEADER_SIZE], &[u8])> {
+    if slice.len() >= HEADER_SIZE {
+        Some((
+            unsafe { &*(slice[0..HEADER_SIZE].as_ptr() as *const [_; HEADER_SIZE]) },
+            &slice[HEADER_SIZE..],
+        ))
+    } else {
+        None
+    }
+}
+
+/*const BUFFER_SIZE: usize = 512;
 use std::fmt::Debug;
 /// This trait represents a message protocol.
 /// The associated type "Commands" represents the possible actions like Wait, Start, Stop,  etc.
@@ -444,7 +382,7 @@ impl<Protocol: ProtocolTrait> Client<Protocol> {
         Ok(())
     }
 }
-/*fn main() {
+fn main() {
     TermLogger::init(LevelFilter::Info, Config::default()).unwrap();
     let mut client = Client::<ProtocolExample>::new();
     client
