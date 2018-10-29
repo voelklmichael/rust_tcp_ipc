@@ -6,7 +6,7 @@ edition = "2018"
 
 [dependencies]
 log = "0.4.5"
-#simplelog = "0.5"
+simplelog = "0.5"
 #num-traits = "*"
 #num-derive="*"
 #enum-primitive-derive="*"

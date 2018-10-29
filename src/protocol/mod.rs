@@ -3,21 +3,22 @@ pub use self::example::*;
 
 use std::fmt::Debug;
 
+pub type Message<P> = (<P as Protocol>::Commands, Vec<u8>);
 #[derive(Debug)]
 pub enum ParseHeaderError {
     CommandParseFailed,
     LengthParseFailed,
 }
-pub trait Protocol {
+pub trait Protocol: 'static {
     type CommandAsArray;
     type HeaderAsArray: Debug;
     type LengthAsArray;
-    type Commands: Clone + Copy + Debug + PartialEq;
-    type BusyStates: Clone + Copy + Debug + PartialEq;
+    type Commands: Clone + Copy + Debug + PartialEq + Send + Sync + 'static;
+    type BusyStates: Clone + Copy + Debug + PartialEq + Send + 'static;
     fn idle() -> Self::BusyStates;
     fn message_is_send_via_immediate_route(
         command: &Self::Commands,
-        message: &Vec<u8>,
+        message: &[u8],
         busy_state: &Self::BusyStates,
     ) -> Option<(Self::Commands, Vec<u8>)>;
     fn parse_command(command: &Self::CommandAsArray) -> Option<Self::Commands>;
@@ -26,6 +27,7 @@ pub trait Protocol {
     fn split_header_array(
         header: &Self::HeaderAsArray,
     ) -> (&Self::CommandAsArray, &Self::LengthAsArray);
+    #[allow(clippy::type_complexity)]
     fn parse_header(
         header: &Self::HeaderAsArray,
     ) -> Result<(Self::Commands, usize), (ParseHeaderError, &Self::HeaderAsArray)> {

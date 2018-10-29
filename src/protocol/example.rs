@@ -14,7 +14,8 @@ pub enum BusyStatesExample {
 const LENGTH_SIZE_EXAMPLE: usize = 3;
 const COMMAND_SIZE_EXAMPLE: usize = 2;
 const HEADER_SIZE_EXAMPLE: usize = LENGTH_SIZE_EXAMPLE + COMMAND_SIZE_EXAMPLE;
-pub struct ProtocolExample;
+#[derive(Debug)]
+pub enum ProtocolExample {}
 impl Protocol for ProtocolExample {
     type CommandAsArray = [u8; COMMAND_SIZE_EXAMPLE];
     type HeaderAsArray = [u8; HEADER_SIZE_EXAMPLE];
@@ -26,7 +27,7 @@ impl Protocol for ProtocolExample {
     }
     fn message_is_send_via_immediate_route(
         _command: &Self::Commands,
-        _message: &Vec<u8>,
+        _message: &[u8],
         _busy_state: &Self::BusyStates,
     ) -> Option<(Self::Commands, Vec<u8>)> {
         None
@@ -56,7 +57,7 @@ impl Protocol for ProtocolExample {
             .iter()
             .rev()
             .enumerate()
-            .map(|(i, &x)| ((x as u32) * 10u32.pow(i as u32)) as usize)
+            .map(|(i, &x)| (u32::from(x) * 10u32.pow(i as u32)) as usize)
             .sum();
         Some(length)
     }
@@ -73,6 +74,7 @@ impl Protocol for ProtocolExample {
             },
         )
     }
+    #[allow(clippy::type_complexity)]
     fn parse_header(
         header: &Self::HeaderAsArray,
     ) -> Result<(Self::Commands, usize), (ParseHeaderError, &Self::HeaderAsArray)> {
