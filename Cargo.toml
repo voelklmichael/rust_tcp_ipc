@@ -1,12 +1,15 @@
 [package]
-name = "rust_tcp_data_share"
+name = "rust_tcp_ipc"
 version = "0.1.0"
 authors = ["Michael <v.mi@gmx.de>"]
 edition = "2018"
 
+[lib]
+name = "rust_tcp_ipc"
+path = "src/lib.rs"
+
 [dependencies]
 log = "0.4.5"
+
+[dev-dependencies]
 simplelog = "0.5"
-#num-traits = "*"
-#num-derive="*"
-#enum-primitive-derive="*"
