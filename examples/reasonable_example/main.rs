@@ -19,7 +19,7 @@ fn main() {
         shutdown_wait_time_in_ns: 1_000_000,
     };
     let mut client =
-        Client::<ProtocolExample>::connect("127.0.0.1:6666", config).expect("client unwrap");
+        Client::<ProtocolExample>::connect("127.0.0.1:6666", config).expect("connecting failed");
 
     std::thread::sleep(std::time::Duration::from_micros(500_000));
     assert!(client

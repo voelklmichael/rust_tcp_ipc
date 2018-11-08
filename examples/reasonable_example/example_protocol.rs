@@ -25,7 +25,7 @@ impl Protocol for ProtocolExample {
     fn idle() -> Self::BusyStates {
         BusyStatesExample::Idle
     }
-    fn message_is_send_via_immediate_route(
+    fn message_is_answered_via_immediate_route(
         _command: &Self::Commands,
         _message: &[u8],
         _busy_state: &Self::BusyStates,
