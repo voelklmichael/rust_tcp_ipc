@@ -3,6 +3,13 @@ name = "rust_tcp_ipc"
 version = "0.2.0"
 authors = ["Michael <v.mi@gmx.de>"]
 edition = "2018"
+license = "MIT"
+keywords = ["tcp", "ipc"]
+readme = "README.md"
+repository = "https://github.com/voelklmichael/rust_tcp_ipc"
+homepage = "https://github.com/voelklmichael/rust_tcp_ipc"
+documentation = "https://docs.rs/rust_tcp_ipc"
+
 
 [lib]
 name = "rust_tcp_ipc"
