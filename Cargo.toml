@@ -9,6 +9,7 @@ readme = "README.md"
 repository = "https://github.com/voelklmichael/rust_tcp_ipc"
 homepage = "https://github.com/voelklmichael/rust_tcp_ipc"
 documentation = "https://docs.rs/rust_tcp_ipc"
+description = "Simple to use crate for Interprocess Communication via TCP."
 
 
 [lib]
