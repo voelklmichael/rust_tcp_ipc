@@ -74,7 +74,6 @@ impl Protocol for ProtocolExample {
             },
         )
     }
-    #[allow(clippy::type_complexity)]
     fn parse_header(
         header: &Self::HeaderAsArray,
     ) -> Result<(Self::Commands, usize), (ParseHeaderError, &Self::HeaderAsArray)> {

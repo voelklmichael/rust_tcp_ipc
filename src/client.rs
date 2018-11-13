@@ -96,7 +96,7 @@ impl<P: Protocol> Client<P> {
                 .map_err(ConnectErrors::SocketListParseError)?;
             loop {
                 if let Some(socket_address) = socket_addresses.next() {
-                    debug!("try to connect to {:?}", socket_address);
+                    debug!("trying to connect to {:?}", socket_address);
                     match TcpStream::connect_timeout(
                         &socket_address,
                         std::time::Duration::from_millis(config.connect_wait_time_ms),
@@ -135,7 +135,7 @@ impl<P: Protocol> Client<P> {
                         // nothing to do
                     }
                     Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                        info!("Read thread seems to be disconnected from main thread. Will be shut down.");
+                        debug!("Read thread seems to be disconnected from main thread. Will be shut down.");
                         break 'read_loop;
                     }
                 }
@@ -144,7 +144,7 @@ impl<P: Protocol> Client<P> {
                         Ok(busy_state) => protocol.update_busy_state(busy_state),
                         Err(std::sync::mpsc::TryRecvError::Empty) => break,
                         Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                            info!("Read thread seems to be disconnected from main thread. Will be shut down.");
+                            debug!("Read thread seems to be disconnected from main thread. Will be shut down.");
                             break 'read_loop;
                         }
                     }
@@ -185,11 +185,11 @@ impl<P: Protocol> Client<P> {
                                         ))
                                         .is_err()
                                     {
-                                        info!("Read thread seems to be disconnected from main thread. Will be shut down.");
+                                        debug!("Read thread seems to be disconnected from main thread. Will be shut down.");
                                         break 'read_loop; //disconnected
                                     }
                                 } else if message_sender.send(Ok((command, message))).is_err() {
-                                    info!("Read thread seems to be disconnected from main thread. Will be shut down.");
+                                    debug!("Read thread seems to be disconnected from main thread. Will be shut down.");
                                     break 'read_loop; //disconnected
                                 }
                             }
@@ -197,6 +197,7 @@ impl<P: Protocol> Client<P> {
                     }
                     Err(err) => {
                         if err.kind() == std::io::ErrorKind::WouldBlock {
+                            // nothing to do, this is interpreted as "no message available"
                         } else if message_sender
                             .send(Err(ReadThreadErrorsInternal::ReadError(err)))
                             .is_err()
@@ -205,9 +206,10 @@ impl<P: Protocol> Client<P> {
                         }
                     }
                 }
+                // wait between loops
                 std::thread::sleep(std::time::Duration::from_nanos(
                     config.read_iteration_wait_time_ns,
-                )); // wait between loops
+                ));
             }
             info!("Read thread finished");
         });
@@ -231,7 +233,7 @@ impl<P: Protocol> Client<P> {
         }
     }
     /// This function check if a message was received and returns it, if so.
-    /// If no message is available (or if a message is only partial available and more data is neceesary), Ok(None) is return.    
+    /// If no message is available (or if a message is only partial available and more data is neceesary), Ok(None) is return.
     /// # Example
     /// ```
     /// let message = client.get_message();

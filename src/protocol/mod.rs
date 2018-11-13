@@ -191,7 +191,6 @@ pub trait Protocol: 'static {
 
     /// This function parses a header into a command & a message length.
     /// The default implementation is fine.
-    #[allow(clippy::type_complexity)]
     fn parse_header(
         header: &Self::HeaderAsArray,
     ) -> Result<(Self::Commands, usize), (ParseHeaderError, &Self::HeaderAsArray)> {

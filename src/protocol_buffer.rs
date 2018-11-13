@@ -51,7 +51,7 @@ impl<P: Protocol> ProtocolBuffer<P> {
                     // b) the length of the message is too large
                     // Since both cases should never happen, a panic seems reasonable
                     error!("parse error: {:?}, incoming header: {:?}", err, message);
-                    panic!("parse error: {:?}, incoming header: {:?}", err, message)
+                    panic!("parse error: {:?}\r\n, incoming header: {:?}", err, message)
                 }
             };
             self.current_command = Some(command);
