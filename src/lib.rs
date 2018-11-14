@@ -1,4 +1,4 @@
-#![deny(missing_docs)]
+//#![deny(missing_docs)]
 //! This is a crate for Interprocess Communication via TCP.
 //!
 //! It allows for easy, asynchronous sending and receiving messages/commands.
@@ -16,6 +16,4 @@
 mod client;
 mod protocol;
 mod protocol_buffer;
-pub use self::client::{
-    BusyStateUpdateResult, Client, ClientConfig, ParseHeaderError, Protocol, ShutdownError,
-};
+pub use self::client::*;

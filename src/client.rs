@@ -19,6 +19,10 @@ const BUFFER_SIZE: usize = 512;
 pub struct ClientConfig {
     /// This is the time the server as to accept a TCP-connection.
     pub connect_wait_time_ms: u64,
+    /// This is the time the program waits for the server after it accepted the initial TCP connection.
+    /// For example, this can be used to wait for the server doing some initialization.
+    /// Moreover, the message read queue thread needs some time to start.
+    pub after_connect_wait_time_ms: u64,
     /// This is the time the client sleeps between checking for new messages from the server.
     /// Very small values can yield high CPU-usage.
     pub read_iteration_wait_time_ns: u64,
@@ -27,7 +31,7 @@ pub struct ClientConfig {
 }
 
 #[derive(Debug)]
-pub enum ReadThreadErrorsInternal<P: Protocol> {
+enum ReadThreadErrorsInternal<P: Protocol> {
     WriteError(std::io::Error),
     ReadError(std::io::Error),
     ImmediateMessageParseError((P::Commands, Vec<u8>)),
@@ -213,6 +217,9 @@ impl<P: Protocol> Client<P> {
             }
             info!("Read thread finished");
         });
+        std::thread::sleep(std::time::Duration::from_millis(
+            config.after_connect_wait_time_ms,
+        ));
         Ok(Client {
             shutdown_sender,
             busy_state_sender,
@@ -251,6 +258,46 @@ impl<P: Protocol> Client<P> {
             Err(TryRecvError::Disconnected) => Err(ReadThreadErrors::Disconnected),
             Err(TryRecvError::Empty) => Ok(None),
         }
+    }
+    /// This function attemps to clear the message queue.
+    /// To do this, it waits a given duration.
+    /// Then it calls get_message until no message is received, or an error is received (which is returned in turn).
+    /// # Example
+    /// ```
+    /// let result = client.clear_message_queue(std::time::Duration::from_micros(10_000));
+    /// ```
+    pub fn clear_message_queue(
+        &mut self,
+        sleep_time: std::time::Duration,
+    ) -> Result<(), ReadThreadErrors<P>> {
+        std::thread::sleep(sleep_time);
+        loop {
+            match self.get_message() {
+                Ok(Some(_)) => continue,
+                Ok(None) => return Ok(()),
+                Err(x) => return Err(x),
+            }
+        }
+    }
+    /// This function awaits for a message.
+    /// # Example
+    /// ```
+    /// let message = client.await_message(std::time::Duration::from_micros(10_000), std::time::Duration::from_nanos(2_000));
+    /// ```
+    pub fn await_message(
+        &mut self,
+        maximal_wait_time: std::time::Duration,
+        iteration_wait_time: std::time::Duration,
+    ) -> Result<Option<Message<P>>, ReadThreadErrors<P>> {
+        let instant = std::time::Instant::now();
+        while instant.elapsed() < maximal_wait_time {
+            match self.get_message() {
+                Ok(Some(x)) => return Ok(Some(x)),
+                Ok(None) => std::thread::sleep(iteration_wait_time),
+                Err(x) => return Err(x),
+            }
+        }
+        Ok(None)
     }
     /// This function writes/sends a message. The message is given as command (as enum-variant) & a payload/message.
     /// Then the message header is added and send via TCP, including the message.
