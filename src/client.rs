@@ -1,4 +1,4 @@
-pub use super::protocol_buffer::*;
+use super::protocol_buffer::*;
 
 pub use std::io::{Read, Write};
 pub use std::net::{TcpListener, TcpStream, ToSocketAddrs};
@@ -34,22 +34,36 @@ pub struct ClientConfig {
 enum ReadThreadErrorsInternal<P: Protocol> {
     WriteError(std::io::Error),
     ReadError(std::io::Error),
-    ImmediateMessageParseError((P::Commands, Vec<u8>)),
+    ImmediateMessageConstructError((P::Commands, Vec<u8>)),
 }
 #[derive(Debug)]
+/// The error type for operations in the asynchronous read thread
 pub enum ReadThreadErrors<P: Protocol> {
+    /// This indicates that a immediate respond in the read-thread failed
     WriteError(std::io::Error),
+    /// This indicates that the read-thread failed to receive a message
     ReadError(std::io::Error),
-    ImmediateMessageParseError((P::Commands, Vec<u8>)),
+    /// This indicates that the read-thread failed to construct a message.
+    /// This typically happens if the protocol implementation has a flaw.
+    ImmediateMessageConstructError((P::Commands, Vec<u8>)),
+    /// This happens if the read-thread is disconnected from the server.
     Disconnected,
 }
 /// The error type for the connect-function.
 #[derive(Debug)]
 pub enum ConnectErrors {
-    SocketListIsEmpty,
+    /// This happens if the input socket list is not a valid address.
+    /// For example, the port may be missing.
     SocketListParseError(std::io::Error),
-    TryCloneError(std::io::Error),
+    /// The parsed socket list is empty
+    SocketListIsEmpty,
+    /// This occurs if the server is not available during connecting.
     ConnectionError(std::io::Error),
+    /// This happens if a connection was established succesfully,
+    /// but the cloning of the streams for the asynchronous read thread failed.
+    TryCloneError(std::io::Error),
+    /// Internally the tcp-stream is set to non-blocking.
+    /// This error indicates that this operation failed.
     SetNonblockingError,
 }
 /// This is the main type of the library.
@@ -63,7 +77,7 @@ pub struct Client<P: Protocol> {
     shutdown_wait_time_in_ns: u64,
 }
 
-#[derive(Debug, PartialEq, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 /// The error type for a BusyState update
 pub enum BusyStateUpdateResult {
     /// Update succesful
@@ -72,8 +86,12 @@ pub enum BusyStateUpdateResult {
     Disconnected,
 }
 #[derive(Debug)]
+/// The error type for a message writing
 pub enum WriteMessageErrors {
+    /// Failed to construct message. This indicates that the protocol implementation has a flaw
     MessageConstructionFailed,
+    /// Failed to send message.
+    /// This indicates typically a run-time problem.
     MessageSendFailed(std::io::Error),
 }
 impl<P: Protocol> Client<P> {
@@ -183,7 +201,7 @@ impl<P: Protocol> Client<P> {
                                         }
                                     } else if message_sender
                                         .send(Err(
-                                            ReadThreadErrorsInternal::ImmediateMessageParseError((
+                                            ReadThreadErrorsInternal::ImmediateMessageConstructError((
                                                 command, message,
                                             )),
                                         ))
@@ -251,8 +269,8 @@ impl<P: Protocol> Client<P> {
             Ok(Err(x)) => Err(match x {
                 ReadThreadErrorsInternal::WriteError(x) => ReadThreadErrors::WriteError(x),
                 ReadThreadErrorsInternal::ReadError(x) => ReadThreadErrors::ReadError(x),
-                ReadThreadErrorsInternal::ImmediateMessageParseError(x) => {
-                    ReadThreadErrors::ImmediateMessageParseError(x)
+                ReadThreadErrorsInternal::ImmediateMessageConstructError(x) => {
+                    ReadThreadErrors::ImmediateMessageConstructError(x)
                 }
             }),
             Err(TryRecvError::Disconnected) => Err(ReadThreadErrors::Disconnected),

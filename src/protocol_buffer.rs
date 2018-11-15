@@ -1,7 +1,7 @@
 pub use super::protocol::*;
 pub use log::*;
 
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ProtocolBuffer<P: Protocol> {
     current_command: Option<P::Commands>,
     current_target: usize,
