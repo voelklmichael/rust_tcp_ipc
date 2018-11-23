@@ -1,5 +1,5 @@
 pub use super::protocol::*;
-pub use log::*;
+use log::*;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ProtocolBuffer<P: Protocol> {
@@ -56,10 +56,14 @@ impl<P: Protocol> ProtocolBuffer<P> {
             };
             self.current_command = Some(command);
             self.current_target = length;
-            self.current_message = message.to_vec(); // capicity can also be set already
-            self.incoming_buffer_vec = self.current_message.split_off(length);
-            self.current_message
-                .reserve(length - self.current_message.len());
+            self.current_message = message.to_vec(); // capacity can also be set already
+            if length > self.current_message.len() {
+                self.incoming_buffer_vec = Vec::new();
+            } else {
+                self.incoming_buffer_vec = self.current_message.split_off(length);
+                self.current_message
+                    .reserve(length - self.current_message.len());
+            }
             debug!(
                 "New message started: {:?}",
                 (command, self.current_message.clone())

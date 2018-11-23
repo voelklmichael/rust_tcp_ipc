@@ -1,8 +1,10 @@
 use super::protocol_buffer::*;
 
-pub use std::io::{Read, Write};
-pub use std::net::{TcpListener, TcpStream, ToSocketAddrs};
-pub use std::sync::mpsc::TryRecvError;
+pub use super::protocol_buffer::Protocol;
+use log::*;
+use std::io::{Read, Write};
+use std::net::{TcpStream, ToSocketAddrs};
+use std::sync::mpsc::TryRecvError;
 
 const BUFFER_SIZE: usize = 512;
 
