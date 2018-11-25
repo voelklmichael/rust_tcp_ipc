@@ -1,4 +1,4 @@
-[![Documentation](https://docs.rs/rust_tcp_ipc/badge.svg)](https://docs.rs/rust_tcp_ipc)
+e[![Documentation](https://docs.rs/rust_tcp_ipc/badge.svg)](https://docs.rs/rust_tcp_ipc)
 # rust_tcp_ipc
 This is a crate for Interprocess Communication via TCP.
 

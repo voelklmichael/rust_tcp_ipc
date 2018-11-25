@@ -1,6 +1,6 @@
 use super::protocol_buffer::*;
 
-pub use super::protocol_buffer::Protocol;
+pub use super::protocol_buffer::{ParseHeaderError, Protocol};
 use log::*;
 use std::io::{Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
