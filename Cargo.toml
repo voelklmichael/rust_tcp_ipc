@@ -1,6 +1,6 @@
 [package]
 name = "rust_tcp_ipc"
-version = "0.2.4"
+version = "0.2.5"
 authors = ["Michael <v.mi@gmx.de>"]
 edition = "2018"
 license = "MIT"
