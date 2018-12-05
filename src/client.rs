@@ -77,6 +77,8 @@ pub struct Client<P: Protocol> {
     stream: TcpStream,
     shutdown_sender: std::sync::mpsc::Sender<()>,
     shutdown_wait_time_in_ns: u64,
+    busy_state_query_sender: std::sync::mpsc::Sender<()>,
+    busy_state_queried_receiver: std::sync::mpsc::Receiver<P::BusyStates>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -84,6 +86,12 @@ pub struct Client<P: Protocol> {
 pub enum BusyStateUpdateResult {
     /// Update succesful
     Success,
+    /// The only posibility for fail is that the connection is already (disgracefully) closed.
+    Disconnected,
+}
+#[derive(Debug, Clone, Copy, PartialEq)]
+/// The error type for a BusyState query
+pub enum BusyStateQueryResult {
     /// The only posibility for fail is that the connection is already (disgracefully) closed.
     Disconnected,
 }
@@ -147,6 +155,8 @@ impl<P: Protocol> Client<P> {
         let mut client_read = client.try_clone().map_err(ConnectErrors::TryCloneError)?;
         let (message_sender, message_receiver) = std::sync::mpsc::channel();
         let (busy_state_sender, busy_state_receiver) = std::sync::mpsc::channel();
+        let (busy_state_query_sender, busy_state_query_receiver) = std::sync::mpsc::channel();
+        let (busy_state_queried_sender, busy_state_queried_receiver) = std::sync::mpsc::channel();
         let (shutdown_sender, shutdown_receiver) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
             let mut protocol = ProtocolBuffer::<P>::new();
@@ -155,6 +165,22 @@ impl<P: Protocol> Client<P> {
             'read_loop: loop {
                 match shutdown_receiver.try_recv() {
                     Ok(()) => break 'read_loop,
+                    Err(std::sync::mpsc::TryRecvError::Empty) => {
+                        // nothing to do
+                    }
+                    Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                        debug!("Read thread seems to be disconnected from main thread. Will be shut down.");
+                        break 'read_loop;
+                    }
+                }
+                match busy_state_query_receiver.try_recv() {
+                    Ok(()) => match busy_state_queried_sender.send(protocol.get_busy_state()) {
+                        Ok(()) => {}
+                        Err(std::sync::mpsc::SendError(_)) => {
+                            debug!("Read thread seems to be disconnected from main thread. Will be shut down.");
+                            break 'read_loop;
+                        }
+                    },
                     Err(std::sync::mpsc::TryRecvError::Empty) => {
                         // nothing to do
                     }
@@ -246,6 +272,8 @@ impl<P: Protocol> Client<P> {
             message_receiver,
             stream: client,
             shutdown_wait_time_in_ns: config.shutdown_wait_time_in_ns,
+            busy_state_query_sender,
+            busy_state_queried_receiver,
         })
     }
     /// This updates the busy_state.
@@ -257,6 +285,20 @@ impl<P: Protocol> Client<P> {
         match self.busy_state_sender.send(new_busy_state) {
             Ok(()) => BusyStateUpdateResult::Success,
             Err(_) => BusyStateUpdateResult::Disconnected,
+        }
+    }
+    /// This queries the current busy_state.
+    /// # Example
+    /// ```
+    /// let current_busy_state = client.get_busy_state();
+    /// ```
+    pub fn get_busy_state(&mut self) -> Result<P::BusyStates, BusyStateQueryResult> {
+        match self.busy_state_query_sender.send(()) {
+            Ok(()) => match self.busy_state_queried_receiver.recv() {
+                Ok(busy_state) => Ok(busy_state),
+                Err(std::sync::mpsc::RecvError) => Err(BusyStateQueryResult::Disconnected),
+            },
+            Err(std::sync::mpsc::SendError(())) => Err(BusyStateQueryResult::Disconnected),
         }
     }
     /// This function check if a message was received and returns it, if so.
