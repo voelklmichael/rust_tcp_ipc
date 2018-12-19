@@ -20,16 +20,16 @@ const BUFFER_SIZE: usize = 512;
 /// ```
 pub struct ClientConfig {
     /// This is the time the server as to accept a TCP-connection.
-    pub connect_wait_time_ms: u64,
+    pub connect_wait_time: std::time::Duration,
     /// This is the time the program waits for the server after it accepted the initial TCP connection.
     /// For example, this can be used to wait for the server doing some initialization.
     /// Moreover, the message read queue thread needs some time to start.
-    pub after_connect_wait_time_ms: u64,
+    pub after_connect_wait_time: std::time::Duration,
     /// This is the time the client sleeps between checking for new messages from the server.
     /// Very small values can yield high CPU-usage.
-    pub read_iteration_wait_time_ns: u64,
+    pub read_iteration_wait_time: std::time::Duration,
     /// This is the time the client waits for the server to accept a shutdown request.
-    pub shutdown_wait_time_in_ns: u64,
+    pub shutdown_wait_time: std::time::Duration,
 }
 
 #[derive(Debug)]
@@ -76,7 +76,7 @@ pub struct Client<P: Protocol> {
     message_receiver: std::sync::mpsc::Receiver<Result<Message<P>, ReadThreadErrorsInternal<P>>>,
     stream: TcpStream,
     shutdown_sender: std::sync::mpsc::Sender<()>,
-    shutdown_wait_time_in_ns: u64,
+    shutdown_wait_time: std::time::Duration,
     busy_state_query_sender: std::sync::mpsc::Sender<()>,
     busy_state_queried_receiver: std::sync::mpsc::Receiver<P::BusyStates>,
 }
@@ -129,10 +129,7 @@ impl<P: Protocol> Client<P> {
             loop {
                 if let Some(socket_address) = socket_addresses.next() {
                     debug!("trying to connect to {:?}", socket_address);
-                    match TcpStream::connect_timeout(
-                        &socket_address,
-                        std::time::Duration::from_millis(config.connect_wait_time_ms),
-                    ) {
+                    match TcpStream::connect_timeout(&socket_address, config.connect_wait_time) {
                         Ok(stream) => {
                             info!("connected to {:?}", socket_address);
                             break stream;
@@ -257,21 +254,17 @@ impl<P: Protocol> Client<P> {
                     }
                 }
                 // wait between loops
-                std::thread::sleep(std::time::Duration::from_nanos(
-                    config.read_iteration_wait_time_ns,
-                ));
+                std::thread::sleep(config.read_iteration_wait_time);
             }
             info!("Read thread finished");
         });
-        std::thread::sleep(std::time::Duration::from_millis(
-            config.after_connect_wait_time_ms,
-        ));
+        std::thread::sleep(config.after_connect_wait_time);
         Ok(Client {
             shutdown_sender,
             busy_state_sender,
             message_receiver,
             stream: client,
-            shutdown_wait_time_in_ns: config.shutdown_wait_time_in_ns,
+            shutdown_wait_time: config.shutdown_wait_time,
             busy_state_query_sender,
             busy_state_queried_receiver,
         })
@@ -395,9 +388,7 @@ impl<P: Protocol> Client<P> {
             }
         };
 
-        std::thread::sleep(std::time::Duration::from_nanos(
-            self.shutdown_wait_time_in_ns,
-        ));
+        std::thread::sleep(self.shutdown_wait_time);
         let shutdown_succesfully = match self.stream.shutdown(std::net::Shutdown::Both) {
             Ok(()) => {
                 debug!("Shutdown successfully.");
