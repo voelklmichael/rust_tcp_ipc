@@ -1,12 +1,9 @@
-#![feature(duration_float)]
-
-use super::example_protocol::*;
-use crate::*;
-
-use simplelog::*;
-
 #[test]
 fn main() {
+    use super::example_protocol::*;
+    use crate::*;
+
+    use simplelog::*;
     //TermLogger::init(LevelFilter::Debug, simplelog::Config::default()).unwrap();
 
     let config = TcpIpcConfig {

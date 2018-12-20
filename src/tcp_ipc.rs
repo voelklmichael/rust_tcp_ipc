@@ -218,31 +218,36 @@ impl<P: Protocol> TcpIpc<P> {
             let mut protocol = ProtocolBuffer::<P>::new();
             let mut incoming_buffer = [0; BUFFER_SIZE];
             info!("Read thread started");
+            let mut counter = 0;
             'read_loop: loop {
-                match shutdown_receiver.try_recv() {
-                    Ok(()) => break 'read_loop,
-                    Err(std::sync::mpsc::TryRecvError::Empty) => {
-                        // nothing to do
-                    }
-                    Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                        debug!("Read thread seems to be disconnected from main thread. Will be shut down.");
-                        break 'read_loop;
-                    }
-                }
-                match busy_state_query_receiver.try_recv() {
-                    Ok(()) => match busy_state_queried_sender.send(protocol.get_busy_state()) {
-                        Ok(()) => {}
-                        Err(std::sync::mpsc::SendError(_)) => {
+                counter += 1;
+                if counter == 1000 {
+                    counter = 0;
+                    match shutdown_receiver.try_recv() {
+                        Ok(()) => break 'read_loop,
+                        Err(std::sync::mpsc::TryRecvError::Empty) => {
+                            // nothing to do
+                        }
+                        Err(std::sync::mpsc::TryRecvError::Disconnected) => {
                             debug!("Read thread seems to be disconnected from main thread. Will be shut down.");
                             break 'read_loop;
                         }
-                    },
-                    Err(std::sync::mpsc::TryRecvError::Empty) => {
-                        // nothing to do
                     }
-                    Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                        debug!("Read thread seems to be disconnected from main thread. Will be shut down.");
-                        break 'read_loop;
+                    match busy_state_query_receiver.try_recv() {
+                        Ok(()) => match busy_state_queried_sender.send(protocol.get_busy_state()) {
+                            Ok(()) => {}
+                            Err(std::sync::mpsc::SendError(_)) => {
+                                debug!("Read thread seems to be disconnected from main thread. Will be shut down.");
+                                break 'read_loop;
+                            }
+                        },
+                        Err(std::sync::mpsc::TryRecvError::Empty) => {
+                            // nothing to do
+                        }
+                        Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                            debug!("Read thread seems to be disconnected from main thread. Will be shut down.");
+                            break 'read_loop;
+                        }
                     }
                 }
                 loop {
