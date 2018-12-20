@@ -1,4 +1,4 @@
-use rust_tcp_ipc::{ParseHeaderError, Protocol};
+use crate::{ParseHeaderError, Protocol};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum CommandsExample {

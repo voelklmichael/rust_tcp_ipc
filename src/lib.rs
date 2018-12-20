@@ -13,7 +13,11 @@
 //! Further received bytes form the next message.
 //!
 //! An example is given in the Examples.
-mod client;
 mod protocol;
 mod protocol_buffer;
-pub use self::client::*;
+mod tcp_ipc;
+pub use self::tcp_ipc::*;
+mod tests;
+
+mod speed_comparison;
+pub use self::speed_comparison::speed_comparison;

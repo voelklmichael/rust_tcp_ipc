@@ -3,33 +3,32 @@ use super::protocol_buffer::*;
 pub use super::protocol_buffer::{ParseHeaderError, Protocol};
 use log::*;
 use std::io::{Read, Write};
-use std::net::{TcpStream, ToSocketAddrs};
+use std::net::{TcpListener, TcpStream, ToSocketAddrs};
 use std::sync::mpsc::TryRecvError;
 
-const BUFFER_SIZE: usize = 512;
+const BUFFER_SIZE: usize = 128;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 /// This bundles the time-settings for the protocol
+/// A 'None' value means that there will no time spend waiting.
 /// # Example
 /// ```
-/// let config = ClientConfig {
-///     connect_wait_time_ms: 5_000,
-///     read_iteration_wait_time_ns: 1_000,
-///     shutdown_wait_time_in_ns: 1_000_000,
+/// let config = TcpIpcConfig {
+///     after_connect_wait_time: Some(std::time::Duration::from_micros(5_000)),
+///     read_iteration_wait_time: Some(std::time::Duration::from_micros(1)),
+///     shutdown_wait_time: Some(std::time::Duration::from_micros(5_000_000)),
 /// };
 /// ```
-pub struct ClientConfig {
-    /// This is the time the server as to accept a TCP-connection.
-    pub connect_wait_time: std::time::Duration,
+pub struct TcpIpcConfig {
     /// This is the time the program waits for the server after it accepted the initial TCP connection.
     /// For example, this can be used to wait for the server doing some initialization.
     /// Moreover, the message read queue thread needs some time to start.
-    pub after_connect_wait_time: std::time::Duration,
+    pub after_connect_wait_time: Option<std::time::Duration>,
     /// This is the time the client sleeps between checking for new messages from the server.
     /// Very small values can yield high CPU-usage.
-    pub read_iteration_wait_time: std::time::Duration,
+    pub read_iteration_wait_time: Option<std::time::Duration>,
     /// This is the time the client waits for the server to accept a shutdown request.
-    pub shutdown_wait_time: std::time::Duration,
+    pub shutdown_wait_time: Option<std::time::Duration>,
 }
 
 #[derive(Debug)]
@@ -64,6 +63,8 @@ pub enum ConnectErrors {
     /// This happens if a connection was established succesfully,
     /// but the cloning of the streams for the asynchronous read thread failed.
     TryCloneError(std::io::Error),
+    /// This happens if a server tries to bind a socket address and fails.
+    BindError(std::io::Error),
     /// Internally the tcp-stream is set to non-blocking.
     /// This error indicates that this operation failed.
     SetNonblockingError,
@@ -71,12 +72,12 @@ pub enum ConnectErrors {
 /// This is the main type of the library.
 /// Here all the logic is bundle.
 /// It can be used to easily send and receive messages via TCP, allowing for many different protcols to be used.
-pub struct Client<P: Protocol> {
+pub struct TcpIpc<P: Protocol> {
     busy_state_sender: std::sync::mpsc::Sender<P::BusyStates>,
     message_receiver: std::sync::mpsc::Receiver<Result<Message<P>, ReadThreadErrorsInternal<P>>>,
     stream: TcpStream,
     shutdown_sender: std::sync::mpsc::Sender<()>,
-    shutdown_wait_time: std::time::Duration,
+    shutdown_wait_time: Option<std::time::Duration>,
     busy_state_query_sender: std::sync::mpsc::Sender<()>,
     busy_state_queried_receiver: std::sync::mpsc::Receiver<P::BusyStates>,
 }
@@ -104,22 +105,25 @@ pub enum WriteMessageErrors {
     /// This indicates typically a run-time problem.
     MessageSendFailed(std::io::Error),
 }
-impl<P: Protocol> Client<P> {
-    /// This connects the client to the server.
+impl<P: Protocol> TcpIpc<P> {
+    /// This connects a client to a server, allowing to send and receive commands.
+    /// The input variable 'connect_wait_time' is the time the client waits for the Server to accept a TCP-connection.
+    /// A 'None' value yields an infinite waiting period.
     /// # Example
     /// ```
-    /// let config = ClientConfig {
+    /// let config = TcpIpcConfig {
     ///     connect_wait_time_ms: 5_000,
     ///     read_iteration_wait_time_ns: 1_000,
     ///     shutdown_wait_time_in_ns: 1_000_000,
     /// };
     /// let mut client =
-    ///     Client::<ProtocolExample>::connect("127.0.0.1:6666", config).expect("connecting failed");
+    ///     TcpIpc::<ProtocolExample>::client("127.0.0.1:6666", config, None).expect("connecting failed");
     /// ```
-    pub fn connect<T: ToSocketAddrs>(
+    pub fn client<T: ToSocketAddrs>(
         socket_addresses: T,
-        config: ClientConfig,
-    ) -> Result<Client<P>, ConnectErrors> {
+        config: TcpIpcConfig,
+        connect_wait_time: Option<std::time::Duration>,
+    ) -> Result<TcpIpc<P>, ConnectErrors> {
         // connect
         let client = {
             let mut error = self::ConnectErrors::SocketListIsEmpty;
@@ -129,7 +133,11 @@ impl<P: Protocol> Client<P> {
             loop {
                 if let Some(socket_address) = socket_addresses.next() {
                     debug!("trying to connect to {:?}", socket_address);
-                    match TcpStream::connect_timeout(&socket_address, config.connect_wait_time) {
+                    match if let Some(connect_wait_time) = connect_wait_time {
+                        TcpStream::connect_timeout(&socket_address, connect_wait_time)
+                    } else {
+                        TcpStream::connect(&socket_address)
+                    } {
                         Ok(stream) => {
                             info!("connected to {:?}", socket_address);
                             break stream;
@@ -144,12 +152,63 @@ impl<P: Protocol> Client<P> {
                 }
             }
         };
+        Self::start_read_thread(client, config)
+    }
+    /// This sets up a server waiting for a client to connect to it.
+    /// Afterwards it can be used to send and receive commands.
+    /// # Example
+    /// ```
+    /// let config = TcpIpcConfig {
+    ///     read_iteration_wait_time_ns: 1_000,
+    ///     shutdown_wait_time_in_ns: 1_000_000,
+    /// };
+    /// let mut server =
+    ///     TcpIpc::<ProtocolExample>::server("127.0.0.1:6666", config).expect("connecting failed");
+    /// ```
+    pub fn server<T: ToSocketAddrs>(
+        socket_addresses: T,
+        config: TcpIpcConfig,
+    ) -> Result<TcpIpc<P>, ConnectErrors> {
+        // connect
+        let server = {
+            let mut error = self::ConnectErrors::SocketListIsEmpty;
+            let mut socket_addresses = socket_addresses
+                .to_socket_addrs()
+                .map_err(ConnectErrors::SocketListParseError)?;
+            loop {
+                if let Some(socket_address) = socket_addresses.next() {
+                    debug!("trying to connect to {:?}", socket_address);
+                    let listener =
+                        TcpListener::bind(socket_address).map_err(ConnectErrors::BindError)?;
+                    match listener.accept() {
+                        Ok((stream, socket_address)) => {
+                            info!("connected to {:?}", socket_address);
+                            break stream;
+                        }
+                        Err(err) => {
+                            info!("Received error: {:?}", err);
+                            error = ConnectErrors::ConnectionError(err);
+                        }
+                    }
+                } else {
+                    return Err(error);
+                }
+            }
+        };
+        Self::start_read_thread(server, config)
+    }
+    fn start_read_thread(
+        tcp_stream: std::net::TcpStream,
+        config: TcpIpcConfig,
+    ) -> Result<TcpIpc<P>, ConnectErrors> {
         // set non-blocking
-        if client.set_nonblocking(true).is_err() {
+        if tcp_stream.set_nonblocking(true).is_err() {
             return Err(self::ConnectErrors::SetNonblockingError);
         }
         // start read thread
-        let mut client_read = client.try_clone().map_err(ConnectErrors::TryCloneError)?;
+        let mut tcp_stream_read = tcp_stream
+            .try_clone()
+            .map_err(ConnectErrors::TryCloneError)?;
         let (message_sender, message_receiver) = std::sync::mpsc::channel();
         let (busy_state_sender, busy_state_receiver) = std::sync::mpsc::channel();
         let (busy_state_query_sender, busy_state_query_receiver) = std::sync::mpsc::channel();
@@ -196,7 +255,7 @@ impl<P: Protocol> Client<P> {
                         }
                     }
                 }
-                match client_read.read(&mut incoming_buffer) {
+                match tcp_stream_read.read(&mut incoming_buffer) {
                     Ok(message_length) => {
                         if message_length == 0 {
                             // nothing to do
@@ -213,7 +272,7 @@ impl<P: Protocol> Client<P> {
                                         &protocol.get_busy_state(),
                                     ) {
                                     if let Some(message) = P::construct_message(command, &message) {
-                                        if let Err(err) = client_read.write(&message) {
+                                        if let Err(err) = tcp_stream_read.write(&message) {
                                             if message_sender
                                                 .send(Err(ReadThreadErrorsInternal::WriteError(
                                                     err,
@@ -254,21 +313,26 @@ impl<P: Protocol> Client<P> {
                     }
                 }
                 // wait between loops
-                std::thread::sleep(config.read_iteration_wait_time);
+                if let Some(read_iteration_wait_time) = config.read_iteration_wait_time {
+                    std::thread::sleep(read_iteration_wait_time);
+                }
             }
             info!("Read thread finished");
         });
-        std::thread::sleep(config.after_connect_wait_time);
-        Ok(Client {
+        if let Some(after_connect_wait_time) = config.after_connect_wait_time {
+            std::thread::sleep(after_connect_wait_time);
+        }
+        Ok(TcpIpc {
             shutdown_sender,
             busy_state_sender,
             message_receiver,
-            stream: client,
+            stream: tcp_stream,
             shutdown_wait_time: config.shutdown_wait_time,
             busy_state_query_sender,
             busy_state_queried_receiver,
         })
     }
+
     /// This updates the busy_state.
     /// # Example
     /// ```
@@ -323,9 +387,11 @@ impl<P: Protocol> Client<P> {
     /// ```
     pub fn clear_message_queue(
         &mut self,
-        sleep_time: std::time::Duration,
+        sleep_time: Option<std::time::Duration>,
     ) -> Result<(), ReadThreadErrors<P>> {
-        std::thread::sleep(sleep_time);
+        if let Some(sleep_time) = sleep_time {
+            std::thread::sleep(sleep_time);
+        }
         loop {
             match self.get_message() {
                 Ok(Some(_)) => continue,
@@ -335,6 +401,9 @@ impl<P: Protocol> Client<P> {
         }
     }
     /// This function awaits for a message.
+    /// If no message is received during the wait time, Ok(None) is returned.
+    /// If some message is received, Ok(Some((command, payload))) is returned.
+    /// If an error happens, Err(x) is returned.
     /// # Example
     /// ```
     /// let message = client.await_message(std::time::Duration::from_micros(10_000), std::time::Duration::from_nanos(2_000));
@@ -342,13 +411,17 @@ impl<P: Protocol> Client<P> {
     pub fn await_message(
         &mut self,
         maximal_wait_time: std::time::Duration,
-        iteration_wait_time: std::time::Duration,
+        iteration_wait_time: Option<std::time::Duration>,
     ) -> Result<Option<Message<P>>, ReadThreadErrors<P>> {
         let instant = std::time::Instant::now();
         while instant.elapsed() < maximal_wait_time {
             match self.get_message() {
                 Ok(Some(x)) => return Ok(Some(x)),
-                Ok(None) => std::thread::sleep(iteration_wait_time),
+                Ok(None) => {
+                    if let Some(iteration_wait_time) = iteration_wait_time {
+                        std::thread::sleep(iteration_wait_time)
+                    }
+                }
                 Err(x) => return Err(x),
             }
         }
@@ -356,6 +429,8 @@ impl<P: Protocol> Client<P> {
     }
     /// This function writes/sends a message. The message is given as command (as enum-variant) & a payload/message.
     /// Then the message header is added and send via TCP, including the message.
+    /// If an error occurs, Err(x) is returned.
+    /// If the message is writen successfully, Ok(()) is returned.
     /// # Example
     /// ```
     /// let message = client.write_message(ProtocolExampleCommands::Start, "ok".as_bytes());
@@ -388,7 +463,9 @@ impl<P: Protocol> Client<P> {
             }
         };
 
-        std::thread::sleep(self.shutdown_wait_time);
+        if let Some(shutdown_wait_time) = self.shutdown_wait_time {
+            std::thread::sleep(shutdown_wait_time);
+        }
         let shutdown_succesfully = match self.stream.shutdown(std::net::Shutdown::Both) {
             Ok(()) => {
                 debug!("Shutdown successfully.");

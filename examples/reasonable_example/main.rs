@@ -1,4 +1,5 @@
-use rust_tcp_ipc::*;
+fn main() {}
+/*use rust_tcp_ipc::*;
 
 mod example_protocol;
 use self::example_protocol::*;
@@ -86,3 +87,4 @@ fn start_server() -> std::sync::mpsc::Receiver<()> {
     });
     receiver
 }
+*/
