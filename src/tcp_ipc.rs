@@ -17,6 +17,7 @@ const BUFFER_SIZE: usize = 128;
 ///     after_connect_wait_time: Some(std::time::Duration::from_micros(5_000)),
 ///     read_iteration_wait_time: Some(std::time::Duration::from_micros(1)),
 ///     shutdown_wait_time: Some(std::time::Duration::from_micros(5_000_000)),
+///     check_count: 1,
 /// };
 /// ```
 pub struct TcpIpcConfig {
@@ -29,6 +30,9 @@ pub struct TcpIpcConfig {
     pub read_iteration_wait_time: Option<std::time::Duration>,
     /// This is the time the client waits for the server to accept a shutdown request.
     pub shutdown_wait_time: Option<std::time::Duration>,
+    /// This is the number of iterations inside the read thread after which the busy_update_state will be checked
+    /// A good default value is 1 (check after each iteration)
+    pub check_count: u32,
 }
 
 #[derive(Debug)]
@@ -221,7 +225,7 @@ impl<P: Protocol> TcpIpc<P> {
             let mut counter = 0;
             'read_loop: loop {
                 counter += 1;
-                if counter == 1000 {
+                if counter == config.check_count {
                     counter = 0;
                     match shutdown_receiver.try_recv() {
                         Ok(()) => break 'read_loop,
@@ -249,14 +253,15 @@ impl<P: Protocol> TcpIpc<P> {
                             break 'read_loop;
                         }
                     }
-                }
-                loop {
-                    match busy_state_receiver.try_recv() {
-                        Ok(busy_state) => protocol.update_busy_state(busy_state),
-                        Err(std::sync::mpsc::TryRecvError::Empty) => break,
-                        Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                            debug!("Read thread seems to be disconnected from main thread. Will be shut down.");
-                            break 'read_loop;
+
+                    loop {
+                        match busy_state_receiver.try_recv() {
+                            Ok(busy_state) => protocol.update_busy_state(busy_state),
+                            Err(std::sync::mpsc::TryRecvError::Empty) => break,
+                            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                                debug!("Read thread seems to be disconnected from main thread. Will be shut down.");
+                                break 'read_loop;
+                            }
                         }
                     }
                 }

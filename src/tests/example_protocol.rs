@@ -16,6 +16,7 @@ const COMMAND_SIZE_EXAMPLE: usize = 2;
 const HEADER_SIZE_EXAMPLE: usize = LENGTH_SIZE_EXAMPLE + COMMAND_SIZE_EXAMPLE;
 #[derive(Debug)]
 pub enum ProtocolExample {}
+
 impl Protocol for ProtocolExample {
     type CommandAsArray = [u8; COMMAND_SIZE_EXAMPLE];
     type HeaderAsArray = [u8; HEADER_SIZE_EXAMPLE];
