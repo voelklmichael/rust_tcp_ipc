@@ -72,6 +72,9 @@ pub enum ConnectErrors {
     /// Internally the tcp-stream is set to non-blocking.
     /// This error indicates that this operation failed.
     SetNonblockingError,
+    /// Internally the tcp-stream is set to NoDelay (as default).
+    /// This error indicates that this operation failed.
+    SetNodelayError(std::io::Error),
 }
 /// This is the main type of the library.
 /// Here all the logic is bundle.
@@ -205,6 +208,10 @@ impl<P: Protocol> TcpIpc<P> {
         tcp_stream: std::net::TcpStream,
         config: TcpIpcConfig,
     ) -> Result<TcpIpc<P>, ConnectErrors> {
+        // set no_delay (as default)
+        tcp_stream
+            .set_nodelay(true)
+            .map_err(self::ConnectErrors::SetNodelayError)?;
         // set non-blocking
         if tcp_stream.set_nonblocking(true).is_err() {
             return Err(self::ConnectErrors::SetNonblockingError);
@@ -224,7 +231,6 @@ impl<P: Protocol> TcpIpc<P> {
             info!("Read thread started");
             let mut counter = 0;
             'read_loop: loop {
-                counter += 1;
                 if counter == config.check_count {
                     counter = 0;
                     match shutdown_receiver.try_recv() {
@@ -264,6 +270,8 @@ impl<P: Protocol> TcpIpc<P> {
                             }
                         }
                     }
+                } else {
+                    counter += 1;
                 }
                 match tcp_stream_read.read(&mut incoming_buffer) {
                     Ok(message_length) => {
@@ -494,6 +502,14 @@ impl<P: Protocol> TcpIpc<P> {
         } else {
             Ok(())
         }
+    }
+    /// Attemps to change the Tcp-Stream "NoDelay"-Option
+    pub fn set_nodelay(&mut self, no_delay: bool) -> Result<(), std::io::Error> {
+        self.stream.set_nodelay(no_delay)
+    }
+    /// Attemps to get the Tcp-Stream "NoDelay"-Option
+    pub fn get_nodelay(&self) -> Result<bool, std::io::Error> {
+        self.stream.nodelay()
     }
 }
 /// The error type for a shutdown attemp.

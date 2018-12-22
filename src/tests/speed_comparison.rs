@@ -1,6 +1,6 @@
 const _TIME_LIMIT_IN_US: f64 = 25.0; // this is the maximal allowed average response time in microseconds - longer times will fail this tests
 
-#[test]
+//#[test]
 // this function is a minimial speed test for the tcp protocol
 // this is the source for the definition of constant "TIME_LIMIT_IN_US"
 fn speed_check_tcp_minimal() {
@@ -11,6 +11,7 @@ fn speed_check_tcp_minimal() {
             .accept()
             .expect("Unable to start server")
             .0;
+        server.set_nodelay(true).expect("Failed to set 'NoDelay'");
         std::thread::sleep(std::time::Duration::from_millis(100));
         loop {
             let mut buffer = [0; 128];
@@ -28,6 +29,7 @@ fn speed_check_tcp_minimal() {
     std::thread::sleep(std::time::Duration::from_millis(100));
     let mut client =
         std::net::TcpStream::connect("127.0.0.1:42042").expect("Unable to connect to server");
+    client.set_nodelay(true).expect("Failed to set 'NoDelay'");
 
     std::thread::sleep(std::time::Duration::from_millis(100));
 
@@ -79,7 +81,7 @@ fn speed_check() {
         after_connect_wait_time: Some(std::time::Duration::from_micros(5_000)),
         read_iteration_wait_time: None,
         shutdown_wait_time: Some(std::time::Duration::from_micros(5_000_000)),
-        check_count: 1,
+        check_count: 10_000,
     };
 
     std::thread::spawn(move || {
