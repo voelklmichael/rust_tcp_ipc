@@ -18,6 +18,11 @@ path = "src/lib.rs"
 
 [dependencies]
 log = "0.4.5"
+mio = "0.6.16"
 
 [dev-dependencies]
-simplelog = "0.5"
+criterion = "0.1.2"
+
+[[bench]]
+name = "speed_comparison"
+harness = false

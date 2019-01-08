@@ -2,8 +2,9 @@ use super::protocol_buffer::*;
 
 pub use super::protocol_buffer::{ParseHeaderError, Protocol};
 use log::*;
+use mio::net::{TcpListener, TcpStream};
 use std::io::{Read, Write};
-use std::net::{TcpListener, TcpStream, ToSocketAddrs};
+use std::net::ToSocketAddrs;
 use std::sync::mpsc::TryRecvError;
 
 const BUFFER_SIZE: usize = 128;
@@ -69,12 +70,17 @@ pub enum ConnectErrors {
     TryCloneError(std::io::Error),
     /// This happens if a server tries to bind a socket address and fails.
     BindError(std::io::Error),
-    /// Internally the tcp-stream is set to non-blocking.
-    /// This error indicates that this operation failed.
-    SetNonblockingError,
     /// Internally the tcp-stream is set to NoDelay (as default).
     /// This error indicates that this operation failed.
     SetNodelayError(std::io::Error),
+    /// Internally the tcp-stream receive buffer size is set to header length.
+    /// This error indicates that this operation failed.
+    SetReceiveBufferSizeError(std::io::Error),
+    /// Internally the tcp-stream send buffer size is set to header length.
+    /// This error indicates that this operation failed.
+    SetSendBufferSizeError(std::io::Error),
+    /// This error indicates that the given wait time was exceeded
+    WaitTimeExceeded,
 }
 /// This is the main type of the library.
 /// Here all the logic is bundle.
@@ -141,7 +147,19 @@ impl<P: Protocol> TcpIpc<P> {
                 if let Some(socket_address) = socket_addresses.next() {
                     debug!("trying to connect to {:?}", socket_address);
                     match if let Some(connect_wait_time) = connect_wait_time {
-                        TcpStream::connect_timeout(&socket_address, connect_wait_time)
+                        let now = std::time::Instant::now();
+                        loop {
+                            match TcpStream::connect(&socket_address) {
+                                Ok(stream) => break Ok(stream),
+                                Err(error) => match error.kind() {
+                                    std::io::ErrorKind::WouldBlock => {}
+                                    _ => break Err(error),
+                                },
+                            }
+                            if now.elapsed() > connect_wait_time {
+                                return Err(self::ConnectErrors::WaitTimeExceeded);
+                            }
+                        }
                     } else {
                         TcpStream::connect(&socket_address)
                     } {
@@ -186,8 +204,16 @@ impl<P: Protocol> TcpIpc<P> {
                 if let Some(socket_address) = socket_addresses.next() {
                     debug!("trying to connect to {:?}", socket_address);
                     let listener =
-                        TcpListener::bind(socket_address).map_err(ConnectErrors::BindError)?;
-                    match listener.accept() {
+                        TcpListener::bind(&socket_address).map_err(ConnectErrors::BindError)?;
+                    match loop {
+                        match listener.accept() {
+                            Ok(stream) => break Ok(stream),
+                            Err(error) => match error.kind() {
+                                std::io::ErrorKind::WouldBlock => continue,
+                                _ => break Err(error),
+                            },
+                        }
+                    } {
                         Ok((stream, socket_address)) => {
                             info!("connected to {:?}", socket_address);
                             break stream;
@@ -205,17 +231,24 @@ impl<P: Protocol> TcpIpc<P> {
         Self::start_read_thread(server, config)
     }
     fn start_read_thread(
-        tcp_stream: std::net::TcpStream,
+        tcp_stream: TcpStream,
         config: TcpIpcConfig,
     ) -> Result<TcpIpc<P>, ConnectErrors> {
-        // set no_delay (as default)
+        // set no_delay (as default), adjust buffer sizes
         tcp_stream
             .set_nodelay(true)
             .map_err(self::ConnectErrors::SetNodelayError)?;
-        // set non-blocking
-        if tcp_stream.set_nonblocking(true).is_err() {
-            return Err(self::ConnectErrors::SetNonblockingError);
-        }
+        tcp_stream
+            .set_send_buffer_size(
+                std::mem::size_of::<<P as Protocol>::HeaderAsArray>() / std::mem::size_of::<u8>(),
+            )
+            .map_err(self::ConnectErrors::SetSendBufferSizeError)?;
+        tcp_stream
+            .set_recv_buffer_size(
+                std::mem::size_of::<<P as Protocol>::HeaderAsArray>() / std::mem::size_of::<u8>(),
+            )
+            .map_err(self::ConnectErrors::SetReceiveBufferSizeError)?;
+
         // start read thread
         let mut tcp_stream_read = tcp_stream
             .try_clone()

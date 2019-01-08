@@ -17,5 +17,3 @@ mod protocol;
 mod protocol_buffer;
 mod tcp_ipc;
 pub use self::tcp_ipc::*;
-
-mod tests;
